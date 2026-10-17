@@ -11,11 +11,9 @@ const delay = (ms) => new Promise(res => setTimeout(res, ms));
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 const VOE_REFERER = "https://voe.sx/";
 
-// Security Key (Hugging Face Secret se ya default)
 const MASTER_SECRET_KEY = process.env.MASTER_SECRET_KEY || 'MaxPlayMasterPass777!';
 
 app.get('/api/extract', async (req, res) => {
-    // 1. Security Check: Header ya query se secret key match honi chahiye
     const clientSecret = req.headers['x-maxplay-secret'] || req.query.key;
     if (clientSecret !== MASTER_SECRET_KEY) {
         return res.status(403).json({ error: 'Access Denied: Invalid or Missing Secret Key' });
@@ -29,7 +27,7 @@ app.get('/api/extract', async (req, res) => {
 
     let browser;
     try {
-        console.log(`[INFO] Fast Extraction started for: ${targetUrl}`);
+        console.log(`[INFO] Extraction started for: ${targetUrl}`);
         
         browser = await puppeteer.launch({
             headless: true,
@@ -52,15 +50,14 @@ app.get('/api/extract', async (req, res) => {
         
         await page.setUserAgent(USER_AGENT);
 
-        let m3u8Url = null;
+        let m3u8Url = type = null;
 
-        // 🔥 1. SPEED BOOST: Unwanted resource blocking (images, stylesheets, fonts, media)
         await page.setRequestInterception(true);
         page.on('request', (request) => {
             const reqUrl = request.url();
             const resourceType = request.resourceType();
 
-            if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
+            if (['image', 'stylesheet', 'font'].includes(resourceType)) {
                 request.abort();
                 return;
             }
@@ -69,7 +66,7 @@ app.get('/api/extract', async (req, res) => {
                 if (!reqUrl.includes('ping.gif') && !reqUrl.includes('jwpltx.com')) {
                     if (!m3u8Url) {
                         m3u8Url = reqUrl;
-                        console.log(`[SUCCESS] Fast Intercepted Direct M3U8: ${reqUrl}`);
+                        console.log(`[SUCCESS] Intercepted Direct M3U8: ${reqUrl}`);
                     }
                 } else if (reqUrl.includes('mu=')) {
                     try {
@@ -77,18 +74,15 @@ app.get('/api/extract', async (req, res) => {
                         const mu = urlParams.get('mu');
                         if (mu && mu.includes('.m3u8') && !m3u8Url) {
                             m3u8Url = decodeURIComponent(mu);
-                            console.log(`[SUCCESS] Fast Extracted M3U8 from Tracking Ping: ${m3u8Url}`);
+                            console.log(`[SUCCESS] Extracted M3U8 from Tracking Ping: ${m3u8Url}`);
                         }
-                    } catch (e) {
-                        console.error("Error parsing ping URL:", e.message);
-                    }
+                    } catch (e) {}
                 }
             }
             request.continue();
         });
 
-        // 🔥 2. Fast Navigation (domcontentloaded - heavy load ka wait nahi karna padega)
-        await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        await page.goto(targetUrl, { waitUntil: 'load', timeout: 35000 });
 
         await page.evaluate(() => {
             const clickPlay = () => {
@@ -101,15 +95,27 @@ app.get('/api/extract', async (req, res) => {
                 else document.body.click();
             };
             clickPlay();
-            const interval = setInterval(clickPlay, 200);
-            setTimeout(() => clearInterval(interval), 2000);
+            const interval = setInterval(clickPlay, 400);
+            setTimeout(() => clearInterval(interval), 5000);
         });
 
-        // 🔥 3. Quick Check Loop (100ms interval, max 6 seconds tak wait)
         let attempts = 0;
-        while (!m3u8Url && attempts < 60) {
-            await delay(100);
+        while (!m3u8Url && attempts < 35) {
+            await delay(300);
             attempts++;
+        }
+
+        // Fallback: Check script tags if network missed it
+        if (!m3u8Url) {
+            m3u8Url = await page.evaluate(() => {
+                const scripts = Array.from(document.querySelectorAll('script'));
+                for (const s of scripts) {
+                    const text = s.textContent || '';
+                    const match = text.match(/'(https?:\/\/[^']+\.m3u8[^']*)'/) || text.match(/"(https?:\/\/[^"]+\.m3u8[^"]*)"/);
+                    if (match && match[1]) return match[1];
+                }
+                return null;
+            });
         }
 
         await browser.close();
@@ -143,13 +149,11 @@ app.get('/proxy/m3u8', async (req, res) => {
     if (!targetUrl) return res.status(400).send("Missing M3U8 URL");
 
     try {
-        console.log(`[PROXY M3U8] Fetching: ${targetUrl}`);
         const response = await fetch(targetUrl, {
             headers: { 'Referer': VOE_REFERER, 'User-Agent': USER_AGENT }
         });
         
         if (!response.ok) {
-            console.error(`[PROXY M3U8 ERROR] Upstream status: ${response.status}`);
             return res.status(response.status).send(`Upstream Error: ${response.statusText}`);
         }
         
@@ -165,7 +169,6 @@ app.get('/proxy/m3u8', async (req, res) => {
             line = line.trim();
             if (!line) return '';
             
-            // 🔥 Master playlist ke andar audio/subtitle tracks (#EXT-X-MEDIA:...,URI="...") ko handle karna
             if (line.startsWith('#')) {
                 if (line.includes('URI="')) {
                     return line.replace(/URI="([^"]+)"/, (match, uri) => {
@@ -189,7 +192,6 @@ app.get('/proxy/m3u8', async (req, res) => {
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.send(rewrittenLines.join('\n'));
     } catch (err) {
-        console.error("M3U8 Proxy Exception:", err.message);
         res.status(500).send("M3U8 Proxy Error");
     }
 });
@@ -208,12 +210,9 @@ app.get('/proxy/ts', async (req, res) => {
             fetchHeaders['Range'] = req.headers.range;
         }
 
-        const response = await fetch(chunkUrl, {
-            headers: fetchHeaders
-        });
+        const response = await fetch(chunkUrl, { headers: fetchHeaders });
 
         if (!response.ok && response.status !== 206) {
-            console.error(`[CHUNK ERROR] Status: ${response.status} for URL: ${chunkUrl}`);
             return res.status(response.status).send("Failed to fetch chunk");
         }
 
@@ -234,9 +233,7 @@ app.get('/proxy/ts', async (req, res) => {
         }
 
         res.send(buffer);
-        
     } catch (err) {
-        console.error("Chunk Proxy Exception:", err.message);
         res.status(500).send("Chunk Proxy Error");
     }
 });
@@ -245,7 +242,8 @@ app.get('/', (req, res) => {
     res.send("MaxPlay Secure Main Stream Gateway is Running 🚀");
 });
 
-ThePORT = 7860;
-app.listen(7860, '0.0.0.0', () => {
-    console.log(`MaxPlay Secure Master Gateway running on port 7860`);
+const PORT = process.env.PORT || 7860;
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`MaxPlay Secure Master Gateway running on port ${PORT}`);
 });
+
