@@ -27,7 +27,7 @@ app.get('/api/extract', async (req, res) => {
 
     let browser;
     try {
-        console.log(`[INFO] Extraction started for: ${targetUrl}`);
+        console.log(`[INFO] Extended timeout extraction started for: ${targetUrl}`);
         
         browser = await puppeteer.launch({
             headless: true,
@@ -50,7 +50,7 @@ app.get('/api/extract', async (req, res) => {
         
         await page.setUserAgent(USER_AGENT);
 
-        let m3u8Url = type = null;
+        let m3u8Url = null;
 
         await page.setRequestInterception(true);
         page.on('request', (request) => {
@@ -82,7 +82,7 @@ app.get('/api/extract', async (req, res) => {
             request.continue();
         });
 
-        await page.goto(targetUrl, { waitUntil: 'load', timeout: 35000 });
+        await page.goto(targetUrl, { waitUntil: 'load', timeout: 60000 });
 
         await page.evaluate(() => {
             const clickPlay = () => {
@@ -95,13 +95,14 @@ app.get('/api/extract', async (req, res) => {
                 else document.body.click();
             };
             clickPlay();
-            const interval = setInterval(clickPlay, 400);
-            setTimeout(() => clearInterval(interval), 5000);
+            const interval = setInterval(clickPlay, 500);
+            setTimeout(() => clearInterval(interval), 15000);
         });
 
+        // ⏱️ Timeout increased to 2 minutes (240 attempts * 500ms = 120 seconds)
         let attempts = 0;
-        while (!m3u8Url && attempts < 35) {
-            await delay(300);
+        while (!m3u8Url && attempts < 240) {
+            await delay(500);
             attempts++;
         }
 
@@ -134,7 +135,7 @@ app.get('/api/extract', async (req, res) => {
                 }
             });
         } else {
-            return res.status(404).json({ error: 'M3U8 link not found quickly' });
+            return res.status(404).json({ error: 'M3U8 link not found within 2 minutes timeout' });
         }
 
     } catch (error) {
@@ -234,6 +235,7 @@ app.get('/proxy/ts', async (req, res) => {
 
         res.send(buffer);
     } catch (err) {
+        console.error("Chunk Proxy Exception:", err.message);
         res.status(500).send("Chunk Proxy Error");
     }
 });
@@ -246,4 +248,4 @@ const PORT = process.env.PORT || 7860;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`MaxPlay Secure Master Gateway running on port ${PORT}`);
 });
-
+            
